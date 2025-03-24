@@ -1,0 +1,430 @@
+<?php
+date_default_timezone_set('Asia/Bangkok');
+header("Content-type: application/json; charset=utf-8");
+include("../connectDB.php");
+
+if (isset($_GET["mode"])) {
+    $mode = $_GET["mode"];
+
+    if ($mode == "Load_Process") {
+
+        $stid = oci_parse(
+            $conn,
+            "SELECT 
+                PROCESS_CD, 
+                CASE 
+                    WHEN PROCESS_DESCRIPTION IS NOT NULL THEN 
+                        CONCAT(CONCAT(PROCESS_NAME, ' ('), CONCAT(PROCESS_DESCRIPTION, ')'))
+                    ELSE PROCESS_NAME
+                END AS NAME 
+            FROM MTE40DB.PSTI0002 
+            WHERE DEPARTMENT = 'MT400' AND PROCESS_NAME != 'TEST' 
+            ORDER BY NAME ASC"
+        );
+        oci_execute($stid);
+
+        $arr = [];
+        while ($row = oci_fetch_array($stid, OCI_ASSOC + OCI_RETURN_NULLS)) {
+            array_push($arr, $row);
+        }
+
+        if (count($arr) > 0) {
+            return_json(1, $arr, "");
+        } else {
+            return_json(0, $arr, "No Data !!!");
+        }
+    } else if ($mode == "Load_Timeline") {
+        // $date = isset($_GET["date"]) ? $_GET["date"] : $_POST["date"];
+        $show_mode = isset($_GET["show_mode"]) ? $_GET["show_mode"] : $_POST["show_mode"];
+        $shift = isset($_GET["shift"]) ? $_GET["shift"] : $_POST["shift"];
+        $process = isset($_GET["process"]) ? $_GET["process"] : $_POST["process"];
+        $firstdate = isset($_GET["firstdate"]) ? $_GET["firstdate"] : $_POST["firstdate"];
+        $lastdate = isset($_GET["lastdate"]) ? $_GET["lastdate"] : $_POST["lastdate"];
+
+        $sql = "SELECT
+                    EMP_ID,
+                    SHIFT,
+                    NAME,
+                    MODE_,
+                    LOSS_CD,
+                    TO_CHAR((TO_DATE(TO_CHAR(START_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - DATE '1970-01-01') * 86400000) AS IN_DATE,
+                    TO_CHAR((TO_DATE(TO_CHAR(END_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - DATE '1970-01-01') * 86400000) AS OUT_DATE,
+                    START_DATETIME ,
+                    END_DATETIME , 
+                    REQUESTED_DATETIME ,
+                    SUM_TIME
+                FROM
+                (    
+                    (
+                    SELECT
+                        tm11.PIC_ID AS EMP_ID,
+                        ti5.SHIFT,
+                        CONCAT(CONCAT(ti5.SHIFT, ' '), CONCAT(CONCAT(ti5.EMP_ID, ' '), ti5.EMP_NAME_TH)) AS NAME,
+                        th4.SECTION,
+                        ti5.DEPARTMENT,
+                        tm11.IN_DATETIME AS START_DATETIME, 
+                        CASE 
+                            WHEN  tm11.OUT_DATETIME IS NULL THEN th4.FINISHED_DATETIME
+                            ELSE tm11.OUT_DATETIME
+                        END AS END_DATETIME ,
+                        th4.LOSS_CD ,
+                        th4.REQUESTED_DATETIME ,
+                        CASE
+                            WHEN tm11.OUT_DATETIME IS NULL THEN 
+                                TO_CHAR(((TO_DATE(TO_CHAR(th4.FINISHED_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(tm11.IN_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                            ELSE TO_CHAR(((TO_DATE(TO_CHAR(tm11.OUT_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(tm11.IN_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        END AS SUM_TIME,
+                        'LOSS_MODE' AS MODE_
+                    FROM
+                        MTE40DB.PSTM0011 tm11
+                    LEFT JOIN (
+                        SELECT
+                            sth4.HSR_ID,
+                            sth4.LINEINFO_ID,
+                            sth4.LOSS_CD,
+                            sth4.SECTION,
+                            sth4.REQUESTED_DATETIME,
+                            sth4.SUPPORTED_DATETIME,
+                            CASE 
+                                WHEN sth4.FINISHED_DATETIME IS NULL THEN SYSDATE
+                                ELSE sth4.FINISHED_DATETIME
+                            END AS FINISHED_DATETIME            
+                        FROM  MTE40DB.PSTH0004 sth4 ) th4 ON th4.HSR_ID = tm11.HSR_ID
+                    LEFT JOIN MTE40DB.PSTM0002 tm2 ON th4.LINEINFO_ID = tm2.LINEINFO_ID
+                    LEFT JOIN MTE40DB.PSTI0005 ti5 ON tm11.PIC_ID = ti5.EMP_ID
+                    WHERE
+                        tm11.PIC_STATUS IN ('3', '31')
+                        AND th4.SUPPORTED_DATETIME IS NOT NULL
+                        AND th4.LOSS_CD != 'TEST'
+                    )
+                UNION
+                    (
+                    SELECT
+                        vpeu.EMP_ID,
+                        vpeu.SHIFT,
+                        vpeu.NAME,
+                        vpeu.SECTION,
+                        vpeu.DEPARTMENT,
+                        vpeu.START_DATETIME,
+                        CASE 
+                            WHEN vpeu.END_DATETIME IS NULL THEN SYSDATE
+                            ELSE vpeu.END_DATETIME
+                        END AS END_DATETIME,
+                        vpeu.LOSS_CD,
+                        vpeu.REQUESTED_DATETIME,
+                        CASE 
+                            WHEN vpeu.END_DATETIME IS NULL THEN 
+                            TO_CHAR(((TO_DATE(TO_CHAR(SYSDATE, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(vpeu.START_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        ELSE TO_CHAR(((TO_DATE(TO_CHAR(vpeu.END_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(vpeu.START_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        END AS SUM_TIME,
+                        vpeu.MODE_
+                    FROM
+                        MTE40DB.VIEW_PST_EMP_UNAVAILABLETIME vpeu
+                    WHERE 
+                        vpeu.START_DATETIME IS NOT NULL 
+                    )
+                UNION 
+                    (
+                    SELECT
+                        *
+                    FROM 
+                        (
+                        SELECT
+                            th4.SUGGESTION_EMP_ID AS EMP_ID,
+                            ti5.SHIFT,
+                            CONCAT(CONCAT(ti5.SHIFT, ' '), CONCAT(CONCAT(ti5.EMP_ID, ' '), ti5.EMP_NAME_TH)) AS NAME,
+                            th4.SECTION,
+                            ti5.DEPARTMENT,
+                            th4.RESPONDED_DATETIME  AS START_DATETIME,
+                            CASE 
+                                WHEN th4.SUPPORTED_DATETIME IS NULL THEN SYSDATE
+                                ELSE th4.SUPPORTED_DATETIME
+                            END AS END_DATETIME,
+                            'WS' AS LOSS_CD,
+                            th4.REQUESTED_DATETIME,
+                            CASE 
+                                WHEN th4.SUPPORTED_DATETIME IS NULL THEN
+                                    TO_CHAR(((TO_DATE(TO_CHAR(SYSDATE, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(th4.RESPONDED_DATETIME , 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                                ELSE TO_CHAR(((TO_DATE(TO_CHAR(th4.SUPPORTED_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(th4.RESPONDED_DATETIME , 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                            END AS SUM_TIME,
+                            'LOSS_MODE' AS MODE_
+                        FROM 
+                            MTE40DB.PSTH0004 th4
+                        LEFT JOIN MTE40DB.PSTI0005 ti5 ON th4.SUGGESTION_EMP_ID = ti5.EMP_ID 
+                        WHERE 
+                            th4.SUGGESTION_EMP_ID IS NOT NULL 
+                            AND th4.STATUS != '99'
+                            AND LOSS_CD != 'TEST'
+                            AND LOSS_CD = 'WR'
+                        )
+                    )
+                ) 
+                WHERE
+                    MODE_ IN ('" . implode("', '", $show_mode) . "')
+                    AND REQUESTED_DATETIME IS NOT NULL 
+                    AND MTE40DB.MONITOR_DATE(REQUESTED_DATETIME) BETWEEN TO_DATE('$firstdate', 'DD/MM/YYYY') AND TO_DATE('$lastdate', 'DD/MM/YYYY')
+                    AND EMP_ID NOT LIKE 'ADMIN%'
+                    AND EMP_ID NOT LIKE 'MT%'
+                    AND SECTION = 'X40'
+                    AND SHIFT IN ('" . implode("', '", $shift) . "')
+                    AND DEPARTMENT = 'MT400'
+                    AND LOSS_CD NOT IN ('OFFLINE', 'อื่นๆ(ออกโอ)', 'อื่นๆ(อออกโอ)', 'ออกงาน', 'อื่นๆ(ระบบไม่ออเอง)')
+                    AND EMP_ID IN (
+                                    SELECT
+                                        EMP_ID
+                                    FROM
+                                        MTE40DB.PSTM0002 w_tm2
+                                    INNER JOIN MTE40DB.pstm0001 w_tm1 ON
+                                        W_TM1 .MACHINE_ID = w_tm2.MACHINE_ID
+                                    WHERE
+                                        w_tm2.PROCESS_CD IN ('" . implode("', '", $process) . "')
+                                    GROUP BY
+                                        w_tm1.EMP_ID
+                                )
+                ORDER BY
+                    CASE
+                        WHEN REGEXP_LIKE(NAME, '^D') THEN 1
+                        WHEN REGEXP_LIKE(NAME, '^A') THEN 2
+                        WHEN REGEXP_LIKE(NAME, '^B') THEN 3
+                    END,
+                    CASE 
+                        WHEN LOSS_CD = 'WS' THEN 1
+                    END,
+                    EMP_ID ASC";
+
+
+        $stid = oci_parse($conn, $sql);
+        oci_execute($stid);
+
+        $arr = [];
+        while ($row = oci_fetch_array($stid, OCI_ASSOC + OCI_RETURN_NULLS)) {
+            array_push($arr, $row);
+        }
+
+
+        $outputData = [];
+        foreach ($arr as $item) {
+            $name = $item['NAME'];
+            $lossCd = $item['LOSS_CD'];
+            $inDate = $item['IN_DATE'];
+            $outDate = $item['OUT_DATE'];
+            
+            $outputData[$lossCd]['name'] = $lossCd;
+            $outputData[$lossCd]['data'][] = array(
+                'x' => $name,
+                'y' => array($inDate, $outDate)
+            );
+        }
+        
+        // Format output
+        $output = array_values($outputData);
+
+        if (count($output) > 0) {
+            return_json(1, $output, "");
+        } else {
+            return_json(0, $output, "No Data !!!");
+        }
+    } else if ($mode == "Load_Chart") {
+        // $date = isset($_GET["date"]) ? $_GET["date"] : $_POST["date"];
+        $show_mode = isset($_GET["show_mode"]) ? $_GET["show_mode"] : $_POST["show_mode"];
+        $shift = isset($_GET["shift"]) ? $_GET["shift"] : $_POST["shift"];
+        $process = isset($_GET["process"]) ? $_GET["process"] : $_POST["process"];
+        $firstdate = isset($_GET["firstdate"]) ? $_GET["firstdate"] : $_POST["firstdate"];
+        $lastdate = isset($_GET["lastdate"]) ? $_GET["lastdate"] : $_POST["lastdate"];
+
+        $sql = "SELECT
+                    EMP_ID,
+                    SHIFT,
+                    NAME,
+                    MODE_,
+                    LOSS_CD,
+                    SUM(SUM_TIME) AS SUM_TIME
+                FROM
+                (    
+                    (
+                    SELECT
+                        tm11.PIC_ID AS EMP_ID,
+                        ti5.SHIFT,
+                        CONCAT(CONCAT(ti5.SHIFT, ' '), CONCAT(CONCAT(ti5.EMP_ID, ' '), ti5.EMP_NAME_TH)) AS NAME,
+                        th4.SECTION,
+                        ti5.DEPARTMENT,
+                        tm11.IN_DATETIME AS START_DATETIME, 
+                        CASE
+                            WHEN  tm11.OUT_DATETIME IS NULL THEN th4.FINISHED_DATETIME
+                            ELSE tm11.OUT_DATETIME
+                        END AS END_DATETIME ,
+                        th4.LOSS_CD ,
+                        th4.REQUESTED_DATETIME ,
+                        CASE
+                            WHEN tm11.OUT_DATETIME IS NULL THEN 
+                                TO_CHAR(((TO_DATE(TO_CHAR(th4.FINISHED_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(tm11.IN_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                            ELSE TO_CHAR(((TO_DATE(TO_CHAR(tm11.OUT_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(tm11.IN_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        END AS SUM_TIME,
+                        'LOSS_MODE' AS MODE_
+                    FROM
+                        MTE40DB.PSTM0011 tm11
+                    LEFT JOIN (
+                        SELECT
+                            sth4.HSR_ID,
+                            sth4.LINEINFO_ID,
+                            sth4.LOSS_CD,
+                            sth4.SECTION,
+                            sth4.REQUESTED_DATETIME,
+                            sth4.SUPPORTED_DATETIME,
+                            CASE 
+                                WHEN sth4.FINISHED_DATETIME IS NULL THEN SYSDATE
+                                ELSE sth4.FINISHED_DATETIME
+                            END AS FINISHED_DATETIME            
+                        FROM  MTE40DB.PSTH0004 sth4 ) th4 ON th4.HSR_ID = tm11.HSR_ID
+                    LEFT JOIN MTE40DB.PSTM0002 tm2 ON th4.LINEINFO_ID = tm2.LINEINFO_ID
+                    LEFT JOIN MTE40DB.PSTI0005 ti5 ON tm11.PIC_ID = ti5.EMP_ID
+                    WHERE
+                        tm11.PIC_STATUS IN ('3', '31')
+                        AND th4.SUPPORTED_DATETIME IS NOT NULL
+                        AND th4.LOSS_CD != 'TEST'
+                    )
+                UNION
+                    (
+                    SELECT
+                        vpeu.EMP_ID,
+                        vpeu.SHIFT,
+                        vpeu.NAME,
+                        vpeu.SECTION,
+                        vpeu.DEPARTMENT,
+                        vpeu.START_DATETIME,
+                        CASE 
+                            WHEN vpeu.END_DATETIME IS NULL THEN SYSDATE
+                            ELSE vpeu.END_DATETIME
+                        END AS END_DATETIME,
+                        vpeu.LOSS_CD,
+                        vpeu.REQUESTED_DATETIME,
+                        CASE 
+                            WHEN vpeu.END_DATETIME IS NULL THEN 
+                            TO_CHAR(((TO_DATE(TO_CHAR(SYSDATE, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(vpeu.START_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        ELSE TO_CHAR(((TO_DATE(TO_CHAR(vpeu.END_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS') - TO_DATE(TO_CHAR(vpeu.START_DATETIME, 'DD-MM-YYYY HH24:MI:SS'), 'DD-MM-YYYY HH24:MI:SS')) * 1440), '99999.99')
+                        END AS SUM_TIME,
+                        vpeu.MODE_
+                    FROM
+                        MTE40DB.VIEW_PST_EMP_UNAVAILABLETIME vpeu
+                    WHERE 
+                        vpeu.START_DATETIME IS NOT NULL 
+                    )
+                )
+                WHERE
+                    MODE_ IN ('" . implode("', '", $show_mode) . "')
+                    AND REQUESTED_DATETIME IS NOT NULL 
+                    AND MTE40DB.MONITOR_DATE(REQUESTED_DATETIME) BETWEEN TO_DATE('$firstdate', 'DD/MM/YYYY') AND TO_DATE('$lastdate', 'DD/MM/YYYY')
+                    AND EMP_ID NOT LIKE 'ADMIN%'
+                    AND EMP_ID NOT LIKE 'MT%'
+                    AND SECTION = 'X40'
+                    AND SHIFT IN ('" . implode("', '", $shift) . "')
+                    AND DEPARTMENT = 'MT400'
+                    AND LOSS_CD NOT IN ('OFFLINE', 'อื่นๆ(ออกโอ)', 'อื่นๆ(อออกโอ)', 'ออกงาน', 'อื่นๆ(ระบบไม่ออเอง)')
+                    AND EMP_ID IN (
+                                    SELECT
+                                        EMP_ID
+                                    FROM
+                                        MTE40DB.PSTM0002 w_tm2
+                                    INNER JOIN MTE40DB.pstm0001 w_tm1 ON
+                                        W_TM1 .MACHINE_ID = w_tm2.MACHINE_ID
+                                    WHERE
+                                        w_tm2.PROCESS_CD IN ('" . implode("', '", $process) . "')
+                                    GROUP BY
+                                        w_tm1.EMP_ID
+                                )
+                GROUP BY 
+                    EMP_ID,
+                    SHIFT,
+                    NAME,
+                    MODE_,
+                    LOSS_CD
+                ORDER BY
+                    CASE
+                        WHEN REGEXP_LIKE(NAME, '^D') THEN 1
+                        WHEN REGEXP_LIKE(NAME, '^A') THEN 2
+                        WHEN REGEXP_LIKE(NAME, '^B') THEN 3
+                    END,
+                    EMP_ID ASC";
+
+        $stid = oci_parse($conn, $sql);
+        oci_execute($stid);
+
+        $arr = [];
+        while ($row = oci_fetch_array($stid, OCI_ASSOC + OCI_RETURN_NULLS)) {
+            array_push($arr, $row);
+        }
+
+        // Change format date
+        $firstdate = explode("/", $firstdate);
+        $firstdate = date('Y-m-d', mktime(0, 0, 0, $firstdate[1], $firstdate[0],$firstdate[2]));
+
+        $lastdate = explode("/", $lastdate);
+        $lastdate = date('Y-m-d', mktime(0, 0, 0, $lastdate[1], $lastdate[0],$lastdate[2]));
+
+        $diff_date = (date_diff(date_create($firstdate), date_create($lastdate)))->format('%a');
+
+        // Group array with employee name
+        $grouped_arr = array();
+        foreach ($arr as $element) {
+            $grouped_arr[$element['NAME']][] = $element;
+        }
+
+
+        $output = ["categories" => [], "series" => []];
+        $dataMap = [];
+
+        foreach (array_keys($grouped_arr) as $key => $item) {
+            $output["categories"][] = $item;
+            $sum = 0;
+            
+            foreach ($grouped_arr[$item] as $person_key => $person) {
+                $name = $person["LOSS_CD"];
+                $time = $person["SUM_TIME"];
+
+                $index = array_search($item, $output["categories"]);
+                $sum += $time;
+                $dataMap["Unknown Time"][$index] = round((($diff_date + 1) * 720) - $sum);
+                
+                if (!isset($dataMap[$name])) {
+                    $dataMap[$name] = array_fill(0, count($grouped_arr), 0);
+                }
+
+                $dataMap[$name][$index] = $time;
+            }
+        }  
+
+        foreach ($dataMap as $name => $data) {
+            $seriesItem = ["name" => $name, "data" => $data];
+            $output["series"][] = $seriesItem;
+        }
+
+
+        if (count($output) > 0) {
+            return_json(1, $output, [$firstdate, $lastdate, $sql]);
+        } else {
+            return_json(0, $output, "No Data !!!");
+        }
+    }
+}
+function return_json($result, $data, $msg)
+{
+    echo json_encode(array("result" => $result, "data" => $data, "msg" => $msg));
+    die;
+}
+อยากเพิ่มSELECT
+    M.Emp_Code As EMP_ID,
+    m.SHIFT,
+    m.THAI_NAME AS NAME,
+    p.LOSSCODE As LOSS_CD,
+    p.TIMEREQ,
+    p.TIMERESP,
+    p.TIMEFIN
+    
+FROM 
+    PST_004_RECORD p
+FULL OUTER JOIN 
+    MT400_ADMIN_001_EMP_NAME m ON SUBSTR(p.NAMEFIN, 0, 9) LIKE SUBSTR(m.ENG_NAME, 0, 9)
+WHERE 
+    p.LOSSCODE IN ('SS','SS2', 'PM2')
+ORDER BY 
+    TO_DATE(p.TIMEREQ, 'MM/DD/YYYY HH:MI AM') DESC;
